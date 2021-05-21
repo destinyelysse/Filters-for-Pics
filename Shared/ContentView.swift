@@ -6,75 +6,126 @@
 //
 
 import SwiftUI
-import CoreData
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 struct ContentView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
-        animation: .default)
-    private var items: FetchedResults<Item>
+    
+    @State private var image: Image?
+    @State private var filterIntensity = 0.5
+    @State private var showingImagePicker = false
+    @State private var showingFilterSheet = false
+    @State private var inputImage: UIImage?
+    @State private var processedImage: UIImage?
+    
+    @State private var currentFilter: CIFilter = CIFilter.sepiaTone()
+    
+    let context = CIContext()
 
     var body: some View {
-        List {
-            ForEach(items) { item in
-                Text("Item at \(item.timestamp!, formatter: itemFormatter)")
+        
+        let intensity = Binding<Double>(
+            get: {
+                self.filterIntensity
+            },
+            set: {
+                self.filterIntensity = $0
+                self.applyProcessing()
             }
-            .onDelete(perform: deleteItems)
-        }
-        .toolbar {
-            #if os(iOS)
-            EditButton()
-            #endif
-
-            Button(action: addItem) {
-                Label("Add Item", systemImage: "plus")
+        )
+        
+        NavigationView {
+            VStack {
+                ZStack {
+                    Rectangle()
+                        .fill(Color.secondary)
+                    if image != nil {
+                        image?
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        Text("Tap to select a photo")
+                            .foregroundColor(.white)
+                            .font(.headline)
+                            .onTapGesture {
+                                self.showingImagePicker = true
+                            }
+                    }
+                }
+                            
+                HStack {
+                    Text("Intensity")
+                    Slider(value: intensity)
+                }
+                .padding()
+                    
+                HStack {
+                    Button("Change Filter") {
+                        self.showingFilterSheet = true
+                    }
+                    Button("Save") {
+                        guard let processedImage = self.processedImage else {return}
+                        let imageSaver = ImageSaver()
+                        imageSaver.successHandler = {
+                            print("Success!")
+                        }
+                        imageSaver.errorHandler = {
+                            print("Oops! \($0.localizedDescription)")
+                        }
+                        imageSaver.writeToPhotoAlbum(image: processedImage)
+                    }
+                }
+            }
+            .padding([.horizontal, .bottom])
+            .navigationBarTitle("Filters for Pics")
+            .sheet(isPresented: $showingImagePicker, onDismiss: loadImage) {
+                ImagePicker(image: self.$inputImage)
+            }
+            .actionSheet(isPresented: $showingFilterSheet) {
+                            ActionSheet(title: Text("Select a filter"), buttons: [
+                                .default(Text("Crystallize")) { self.setFilter(CIFilter.crystallize()) },
+                                .default(Text("Edges")) { self.setFilter(CIFilter.edges()) },
+                                .default(Text("Gaussian Blur")) { self.setFilter(CIFilter.gaussianBlur()) },
+                                .default(Text("Pixellate")) { self.setFilter(CIFilter.pixellate()) },
+                                .default(Text("Sepia Tone")) { self.setFilter(CIFilter.sepiaTone()) },
+                                .default(Text("Unsharp Mask")) { self.setFilter(CIFilter.unsharpMask()) },
+                                .default(Text("Vignette")) { self.setFilter(CIFilter.vignette()) },
+                                .cancel()
+                            ])
             }
         }
     }
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
+    func loadImage() {
+        guard let inputImage = inputImage else { return }
+        let beginImage = CIImage(image: inputImage)
+        currentFilter.setValue(beginImage, forKey: kCIInputImageKey)
+        applyProcessing()
+    }
+    
+    func applyProcessing() {
+        let inputKeys = currentFilter.inputKeys
+        if inputKeys.contains(kCIInputIntensityKey) { currentFilter.setValue(filterIntensity, forKey: kCIInputIntensityKey) }
+         if inputKeys.contains(kCIInputRadiusKey) { currentFilter.setValue(filterIntensity * 200, forKey: kCIInputRadiusKey) }
+         if inputKeys.contains(kCIInputScaleKey) { currentFilter.setValue(filterIntensity * 10, forKey: kCIInputScaleKey) }
+        guard let outputImage = currentFilter.outputImage else { return }
+        if let cgimg = context.createCGImage(outputImage, from: outputImage.extent) {
+            let uiImage = UIImage(cgImage: cgimg)
+            image = Image(uiImage: uiImage)
+            processedImage = uiImage
         }
     }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            offsets.map { items[$0] }.forEach(viewContext.delete)
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
-        }
+    
+    func setFilter(_ filter: CIFilter) {
+        currentFilter = filter
+        loadImage()
     }
 }
-
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .short
-    formatter.timeStyle = .medium
-    return formatter
-}()
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+        ContentView()
     }
 }
+
+
